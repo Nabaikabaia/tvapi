@@ -1,12 +1,47 @@
-/*
- * worker.js — GlobeTV API + Hentaimama Scraper API
- * Deploy on Cloudflare Workers
+
+
+/* worker.js — GlobeTV API + Hentaimama Scraper API
+ * Deployed on Cloudflare Workers
  * Powered by Nabees Tech
  * WhatsApp: https://whatsapp.com/channel/0029VawtjOXJpe8X3j3NCZ3j
-**/
+ **/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 const BASE_HENTAI = 'https://hentaimama.io';
 const UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36';
 
+// Custom branding 
 const CUSTOM_HEADER = {
   creator: "NABEES",
   provider: "NABEES TECH NAIJA DEVOPS",
@@ -15,6 +50,7 @@ const CUSTOM_HEADER = {
   whatsapp_channel: "https://whatsapp.com/channel/0029VawtjOXJpe8X3j3NCZ3j"
 };
 
+// GlobeTV endpoints mapping
 const GLOBE_ENDPOINTS = {
   '/ch': 'https://raw.githubusercontent.com/globetvapp/globetv.app/main/channels.json.gz',
   '/co': 'https://raw.githubusercontent.com/globetvapp/globetv.app/main/countries.json.gz',
@@ -23,12 +59,16 @@ const GLOBE_ENDPOINTS = {
   '/st': 'https://raw.githubusercontent.com/globetvapp/globetv.app/main/streams.json.gz'
 };
 
+// Track worker start time for uptime calculation
+const START_TIME = Date.now();
+
 export default {
-  async fetch(request, env) {
+  async fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;
     const query = url.searchParams;
     
+    // CORS headers
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
@@ -39,7 +79,7 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
     
-    // GlobeTV endpoints
+    // ========== GLOBE TV ENDPOINTS ==========
     if (GLOBE_ENDPOINTS[path]) {
       try {
         const response = await fetch(GLOBE_ENDPOINTS[path]);
@@ -59,85 +99,79 @@ export default {
       }
     }
     
-    // Hentai endpoints
+    // ========== HENTAI ENDPOINTS ==========
     const action = path.slice(1);
     
     try {
       let result;
       
+      // Episode: /e?url=xxx
       if (action === 'e' && query.get('url')) {
         result = await scrapeEpisode(query.get('url'));
       }
+      // TV Show: /t?url=xxx
       else if (action === 't' && query.get('url')) {
         result = await scrapeTVShow(query.get('url'));
       }
+      // Genre: /g?url=xxx&page=1
       else if (action === 'g' && query.get('url')) {
         let page = parseInt(query.get('page')) || 1;
         let genreUrl = page > 1 ? query.get('url').replace(/\/$/, '') + `/page/${page}/` : query.get('url');
         result = await scrapeGenre(genreUrl);
       }
+      // Search: /s?q=query&page=1
       else if (action === 's' && query.get('q')) {
         let page = parseInt(query.get('page')) || 1;
         result = await scrapeSearch(query.get('q'), page);
       }
+      // Hentai List: /hl?page=1
       else if (action === 'hl') {
         let page = parseInt(query.get('page')) || 1;
         result = await scrapeHentaiList(page);
       }
+      // Trending: /tr?page=1
       else if (action === 'tr') {
         let page = parseInt(query.get('page')) || 1;
         result = await scrapeTrending(page);
       }
+      // List: /ls?url=xxx
       else if (action === 'ls' && query.get('url')) {
         result = await scrapeList(query.get('url'));
       }
+      // Advance Search: /as?year=2024
       else if (action === 'as') {
         const params = Object.fromEntries(url.searchParams);
         result = await scrapeAdvanceSearch(params);
       }
+      // Root endpoint with status, uptime, datetime, and IP
       else if (path === '/') {
+        // Get user's timezone from Cloudflare
         const userTimezone = request.cf?.timezone || 'Africa/Lagos';
         
+        // Get IP address from various headers
         const ip = request.headers.get('cf-connecting-ip') ||
                    request.headers.get('x-forwarded-for')?.split(',')[0] ||
                    request.headers.get('x-real-ip') ||
                    'Unknown';
         
-        let startTime = await env.API_CACHE.get('start_time');
-        if (!startTime) {
-          startTime = Date.now().toString();
-          await env.API_CACHE.put('start_time', startTime, { expirationTtl: 31536000 });
-        }
-        
-        const uptimeSeconds = Math.floor((Date.now() - parseInt(startTime)) / 1000);
+        // Calculate uptime
+        const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
         const uptimeMinutes = Math.floor(uptimeSeconds / 60);
         const uptimeHours = Math.floor(uptimeMinutes / 60);
-        const uptimeDays = Math.floor(uptimeHours / 24);
         
         let uptimeString = '';
-        if (uptimeDays > 0) uptimeString += `${uptimeDays}d `;
-        if (uptimeHours % 24 > 0) uptimeString += `${uptimeHours % 24}h `;
+        if (uptimeHours > 0) uptimeString += `${uptimeHours}h `;
         if (uptimeMinutes % 60 > 0) uptimeString += `${uptimeMinutes % 60}m `;
         uptimeString += `${uptimeSeconds % 60}s`;
-        
-        const now = new Date();
-        const formattedDate = now.toLocaleString('en-NG', { 
-          timeZone: userTimezone,
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false
-        });
         
         return new Response(JSON.stringify({
           ...CUSTOM_HEADER,
           status: "alive",
           uptime: uptimeString,
-          server_time: formattedDate,
-          timezone: userTimezone,
+          datetime: new Date().toLocaleString('en-NG', { 
+            timeZone: userTimezone,
+            hour12: false
+          }),
           ip: ip
         }, null, 2), { headers: corsHeaders });
       }
@@ -333,6 +367,7 @@ async function scrapeTVShow(url) {
     episodes: []
   };
   
+  // Find all links containing "/episodes/" or "/episode/"
   const episodeLinkRegex = /<a[^>]*href="([^"]*(?:\/episodes\/|\/episode\/)[^"]+)"[^>]*>/gi;
   const seen = new Set();
   let match;
@@ -394,3 +429,10 @@ async function scrapeAdvanceSearch(params) {
   const { text: html } = await fetchWithSession(url);
   return extractArticles(html);
 }
+
+
+
+
+// Fork and Deploy on Cloudflare Worker
+ 
+
