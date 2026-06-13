@@ -1,9 +1,10 @@
-// Combined Worker - GlobeTV API + Hentaimama Scraper
-// Shortened endpoints for easier use
+// Combined Worker - GlobeTV API + Hentaimama Scraper API
+// Deployed on Cloudflare Workers
 
 const BASE_HENTAI = 'https://hentaimama.io';
 const UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36';
 
+// Custom branding header (applies to all responses)
 const CUSTOM_HEADER = {
   creator: "NABEES",
   provider: "NABEES TECH NAIJA DEVOPS",
@@ -38,13 +39,7 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
     
-    // ========== GLOBE TV ENDPOINTS (short) ==========
-    // /ch - Channels
-    // /co - Countries  
-    // /ca - Categories
-    // /bl - Blocklist
-    // /st - Streams
-    
+    // ========== GLOBE TV ENDPOINTS ==========
     if (GLOBE_ENDPOINTS[path]) {
       try {
         const response = await fetch(GLOBE_ENDPOINTS[path]);
@@ -64,16 +59,8 @@ export default {
       }
     }
     
-    // ========== HENTAI ENDPOINTS (short) ==========
-    // /e?url=xxx - Episode
-    // /t?url=xxx - TV Show
-    // /g?url=xxx - Genre
-    // /s?q=query - Search
-    // /hl?page=1 - Hentai List
-    // /tr?page=1 - Trending
-    // /ls?url=xxx - List
-    
-    const action = path.slice(1); // Remove leading slash
+    // ========== HENTAI ENDPOINTS ==========
+    const action = path.slice(1);
     
     try {
       let result;
@@ -111,12 +98,12 @@ export default {
       else if (action === 'ls' && query.get('url')) {
         result = await scrapeList(query.get('url'));
       }
-      // Advance Search: /as?year=2024&rating=8 (any params)
+      // Advance Search: /as?year=2024
       else if (action === 'as') {
         const params = Object.fromEntries(url.searchParams);
         result = await scrapeAdvanceSearch(params);
       }
-      // Root endpoint - show available endpoints
+      // Root endpoint
       else if (path === '/') {
         return new Response(JSON.stringify({
           ...CUSTOM_HEADER,
@@ -124,7 +111,7 @@ export default {
             globetv: {
               '/ch': 'Channels',
               '/co': 'Countries',
-              '/ca': 'Categories', 
+              '/ca': 'Categories',
               '/bl': 'Blocklist',
               '/st': 'Streams'
             },
@@ -162,7 +149,7 @@ export default {
   }
 };
 
-// ========== HENTAI SCRAPER FUNCTIONS ==========
+// ========== HELPER FUNCTIONS ==========
 
 async function fetchWithSession(url, cookie = '') {
   const response = await fetch(url, {
@@ -274,6 +261,8 @@ async function getDownloadLinks(sessionCookie, url, videoId) {
   return links;
 }
 
+// ========== SCRAPER FUNCTIONS ==========
+
 async function scrapeEpisode(url) {
   const { text: html, cookie } = await fetchWithSession(url);
   if (!html) return null;
@@ -331,18 +320,24 @@ async function scrapeTVShow(url) {
     episodes: []
   };
   
-  const episodeRegex = /<a[^>]*href="([^"]*\/episodes\/[^"]*|[^"]*\/episode\/[^"]*)"[^>]*>([^<]*)<\/a>/gi;
-  let epMatch;
+  // Find all links containing "/episodes/" or "/episode/"
+  const episodeLinkRegex = /<a[^>]*href="([^"]*(?:\/episodes\/|\/episode\/)[^"]+)"[^>]*>/gi;
   const seen = new Set();
+  let match;
   
-  while ((epMatch = episodeRegex.exec(html)) !== null) {
-    const href = epMatch[1];
+  while ((match = episodeLinkRegex.exec(html)) !== null) {
+    let href = match[1];
+    
+    if (href && !href.startsWith('http')) {
+      href = href.startsWith('/') ? BASE_HENTAI + href : BASE_HENTAI + '/' + href;
+    }
+    
     if (href && !seen.has(href)) {
       seen.add(href);
       const slug = href.split('/').filter(Boolean).pop();
       data.episodes.push({
         url: href,
-        title: slug ? slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : epMatch[2].trim()
+        title: slug ? slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Episode'
       });
     }
   }
