@@ -1,5 +1,8 @@
-// worker.js — GlobeTV API + Hentaimama Scraper API with Uptime & Speed Monitor
-// Deployed on Cloudflare Workers
+/* worker.js — GlobeTV API + Hentaimama Scraper API
+ * Deployed on Cloudflare Workers
+ * Powered by Nabees Tech
+ * WhatsApp: https://whatsapp.com/channel/0029VawtjOXJpe8X3j3NCZ3j
+ **/
 
 const BASE_HENTAI = 'https://hentaimama.io';
 const UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36';
@@ -42,9 +45,6 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
     
-    // Measure response time for each request
-    const requestStartTime = Date.now();
-    
     // ========== GLOBE TV ENDPOINTS ==========
     if (GLOBE_ENDPOINTS[path]) {
       try {
@@ -54,16 +54,7 @@ export default {
           .pipeThrough(new DecompressionStream('gzip'));
         const data = await new Response(decompressed).json();
         
-        const responseTime = Date.now() - requestStartTime;
-        
-        return new Response(JSON.stringify({ 
-          ...CUSTOM_HEADER, 
-          data,
-          _meta: {
-            response_time_ms: responseTime,
-            cached: false
-          }
-        }, null, 2), {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, data }, null, 2), {
           headers: corsHeaders
         });
       } catch (e) {
@@ -118,109 +109,52 @@ export default {
         const params = Object.fromEntries(url.searchParams);
         result = await scrapeAdvanceSearch(params);
       }
-      // Root endpoint with uptime, speed, and date
+      // Root endpoint with status, uptime, datetime, and IP
       else if (path === '/') {
+        // Get user's timezone from Cloudflare
+        const userTimezone = request.cf?.timezone || 'Africa/Lagos';
+        
+        // Get IP address from various headers
+        const ip = request.headers.get('cf-connecting-ip') ||
+                   request.headers.get('x-forwarded-for')?.split(',')[0] ||
+                   request.headers.get('x-real-ip') ||
+                   'Unknown';
+        
         // Calculate uptime
         const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
         const uptimeMinutes = Math.floor(uptimeSeconds / 60);
         const uptimeHours = Math.floor(uptimeMinutes / 60);
-        const uptimeDays = Math.floor(uptimeHours / 24);
         
-        // Format uptime string
         let uptimeString = '';
-        if (uptimeDays > 0) uptimeString += `${uptimeDays}d `;
-        if (uptimeHours % 24 > 0) uptimeString += `${uptimeHours % 24}h `;
+        if (uptimeHours > 0) uptimeString += `${uptimeHours}h `;
         if (uptimeMinutes % 60 > 0) uptimeString += `${uptimeMinutes % 60}m `;
         uptimeString += `${uptimeSeconds % 60}s`;
         
-        // Test speed by fetching a small file from GitHub
-        let speedMs = 'N/A';
-        let speedKbps = 'N/A';
-        try {
-          const speedStart = Date.now();
-          const testResponse = await fetch('https://raw.githubusercontent.com/globetvapp/globetv.app/main/channels.json.gz', {
-            headers: { 'Range': 'bytes=0-10240' } // Fetch only first 10KB for speed test
-          });
-          const testData = await testResponse.arrayBuffer();
-          const speedDuration = Date.now() - speedStart;
-          const bytesLoaded = testData.byteLength;
-          speedMs = speedDuration;
-          speedKbps = Math.round((bytesLoaded / speedDuration) * 8); // kbps
-        } catch(e) {
-          // Speed test failed, keep as N/A
-        }
-        
-        const responseTime = Date.now() - requestStartTime;
-        
         return new Response(JSON.stringify({
           ...CUSTOM_HEADER,
-          status: "online",
-          uptime: {
-            seconds: uptimeSeconds,
-            formatted: uptimeString,
-            since: new Date(START_TIME).toISOString()
-          },
-          performance: {
-            current_response_time_ms: responseTime,
-            speed_test_ms: speedMs,
-            speed_test_kbps: speedKbps,
-            note: speedKbps !== 'N/A' ? "Based on 10KB GitHub fetch" : "Speed test unavailable"
-          },
-          datetime: {
-            utc: new Date().toUTCString(),
-            iso: new Date().toISOString(),
-            local: new Date().toLocaleString('en-NG', { timeZone: 'Africa/Lagos' }),
-            timestamp: Date.now()
-          },
-          endpoints: {
-            globetv: {
-              '/ch': 'Channels',
-              '/co': 'Countries',
-              '/ca': 'Categories',
-              '/bl': 'Blocklist',
-              '/st': 'Streams'
-            },
-            hentai: {
-              '/e?url=xxx': 'Get episode details',
-              '/t?url=xxx': 'Get TV show details',
-              '/g?url=xxx&page=1': 'Get genre list',
-              '/s?q=query&page=1': 'Search',
-              '/hl?page=1': 'Hentai list',
-              '/tr?page=1': 'Trending',
-              '/ls?url=xxx': 'Generic list',
-              '/as?year=2024': 'Advance search'
-            }
-          }
+          status: "alive",
+          uptime: uptimeString,
+          datetime: new Date().toLocaleString('en-NG', { 
+            timeZone: userTimezone,
+            hour12: false
+          }),
+          ip: ip
         }, null, 2), { headers: corsHeaders });
       }
       else {
-        const responseTime = Date.now() - requestStartTime;
         return new Response(JSON.stringify({
           ...CUSTOM_HEADER,
           error: 'Invalid endpoint',
-          hint: 'Visit / for available endpoints',
-          _meta: { response_time_ms: responseTime }
+          hint: 'Visit / for available endpoints'
         }, null, 2), { status: 404, headers: corsHeaders });
       }
       
-      const responseTime = Date.now() - requestStartTime;
-      return new Response(JSON.stringify({ 
-        ...CUSTOM_HEADER, 
-        success: true, 
-        data: result,
-        _meta: { response_time_ms: responseTime }
-      }, null, 2), {
+      return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
         headers: corsHeaders
       });
       
     } catch (e) {
-      const responseTime = Date.now() - requestStartTime;
-      return new Response(JSON.stringify({ 
-        ...CUSTOM_HEADER, 
-        success: false, 
-        error: e.message,
-        _meta: { response_time_ms: responseTime }
-      }, null, 2), {
+      return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: false, error: e.message }, null, 2), {
         status: 500,
         headers: corsHeaders
       });
@@ -461,3 +395,6 @@ async function scrapeAdvanceSearch(params) {
   const { text: html } = await fetchWithSession(url);
   return extractArticles(html);
 }
+
+// Fork and Deploy on Cloudflare Worker
+ 
