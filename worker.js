@@ -8,40 +8,10 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const BASE_HENTAI = 'https://hentaimama.io';
 const UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36';
 
-// Custom branding 
+// Custom branding header
 const CUSTOM_HEADER = {
   creator: "NABEES",
   provider: "NABEES TECH NAIJA DEVOPS",
@@ -50,7 +20,7 @@ const CUSTOM_HEADER = {
   whatsapp_channel: "https://whatsapp.com/channel/0029VawtjOXJpe8X3j3NCZ3j"
 };
 
-// GlobeTV endpoints mapping
+// GlobeTV endpoints 
 const GLOBE_ENDPOINTS = {
   '/ch': 'https://raw.githubusercontent.com/globetvapp/globetv.app/main/channels.json.gz',
   '/co': 'https://raw.githubusercontent.com/globetvapp/globetv.app/main/countries.json.gz',
@@ -58,9 +28,6 @@ const GLOBE_ENDPOINTS = {
   '/bl': 'https://raw.githubusercontent.com/globetvapp/globetv.app/main/blocklist.json.gz',
   '/st': 'https://raw.githubusercontent.com/globetvapp/globetv.app/main/streams.json.gz'
 };
-
-// Track worker start time for uptime calculation
-const START_TIME = Date.now();
 
 export default {
   async fetch(request) {
@@ -143,36 +110,29 @@ export default {
         const params = Object.fromEntries(url.searchParams);
         result = await scrapeAdvanceSearch(params);
       }
-      // Root endpoint with status, uptime, datetime, and IP
+      // Root endpoint
       else if (path === '/') {
-        // Get user's timezone from Cloudflare
-        const userTimezone = request.cf?.timezone || 'Africa/Lagos';
-        
-        // Get IP address from various headers
-        const ip = request.headers.get('cf-connecting-ip') ||
-                   request.headers.get('x-forwarded-for')?.split(',')[0] ||
-                   request.headers.get('x-real-ip') ||
-                   'Unknown';
-        
-        // Calculate uptime
-        const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
-        const uptimeMinutes = Math.floor(uptimeSeconds / 60);
-        const uptimeHours = Math.floor(uptimeMinutes / 60);
-        
-        let uptimeString = '';
-        if (uptimeHours > 0) uptimeString += `${uptimeHours}h `;
-        if (uptimeMinutes % 60 > 0) uptimeString += `${uptimeMinutes % 60}m `;
-        uptimeString += `${uptimeSeconds % 60}s`;
-        
         return new Response(JSON.stringify({
           ...CUSTOM_HEADER,
-          status: "alive",
-          uptime: uptimeString,
-          datetime: new Date().toLocaleString('en-NG', { 
-            timeZone: userTimezone,
-            hour12: false
-          }),
-          ip: ip
+          endpoints: {
+            globetv: {
+              '/ch': 'Channels',
+              '/co': 'Countries',
+              '/ca': 'Categories',
+              '/bl': 'Blocklist',
+              '/st': 'Streams'
+            },
+            hentai: {
+              '/e?url=xxx': 'Get episode details',
+              '/t?url=xxx': 'Get TV show details',
+              '/g?url=xxx&page=1': 'Get genre list',
+              '/s?q=query&page=1': 'Search',
+              '/hl?page=1': 'Hentai list',
+              '/tr?page=1': 'Trending',
+              '/ls?url=xxx': 'Generic list',
+              '/as?year=2024': 'Advance search'
+            }
+          }
         }, null, 2), { headers: corsHeaders });
       }
       else {
@@ -433,6 +393,28 @@ async function scrapeAdvanceSearch(params) {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+    
 // Fork and Deploy on Cloudflare Worker
  
 
