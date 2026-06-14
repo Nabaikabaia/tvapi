@@ -1,12 +1,8 @@
-
-
-/* worker.js — GlobeTV API + Hentaimama Scraper API
+/* worker.js — GlobeTV API + Hentaimama Scraper API + MovieBox API
  * Deployed on Cloudflare Workers
  * Powered by Nabees Tech
  * WhatsApp: https://whatsapp.com/channel/0029VawtjOXJpe8X3j3NCZ3j
  **/
-
-
 
 const BASE_HENTAI = 'https://hentaimama.io';
 const UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36';
@@ -29,6 +25,60 @@ const GLOBE_ENDPOINTS = {
   '/st': 'https://raw.githubusercontent.com/globetvapp/globetv.app/main/streams.json.gz'
 };
 
+// MovieBox API config
+const MOVIEBOX_BASE_URL = "https://h5-api.aoneroom.com";
+const MOVIEBOX_HOST = "moviebox.ph";
+let sessionToken = null;
+
+// MD5 hash function for Cloudflare Workers
+async function md5(str) {
+  const msgUint8 = new TextEncoder().encode(str);
+  const hashBuffer = await crypto.subtle.digest('MD5', msgUint8);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashHex;
+}
+
+// Build client token for MovieBox API
+async function buildClientToken() {
+  const ts = Math.floor(Date.now() / 1000).toString();
+  const rev = ts.split("").reverse().join("");
+  const md5Hash = await md5(rev);
+  return `${ts},${md5Hash}`;
+}
+
+// Build headers for MovieBox API
+async function buildHeaders(token = null) {
+  const headers = {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "X-Client-Info": JSON.stringify({ timezone: "Africa/Lagos" }),
+    "X-Request-Lang": "en",
+    "X-Client-Token": await buildClientToken(),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
+// MovieBox request handler
+async function movieboxRequest(method, path, body = null) {
+  const url = `${MOVIEBOX_BASE_URL}${path}`;
+  const opts = { 
+    method, 
+    headers: await buildHeaders(sessionToken) 
+  };
+  if (body) opts.body = JSON.stringify(body);
+  
+  const res = await fetch(url, opts);
+  const user = res.headers.get("x-user");
+  if (user) {
+    try {
+      sessionToken = JSON.parse(user).token;
+    } catch {}
+  }
+  return res.json();
+}
+
 export default {
   async fetch(request) {
     const url = new URL(request.url);
@@ -38,7 +88,7 @@ export default {
     // CORS headers
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Content-Type': 'application/json'
     };
     
@@ -60,6 +110,199 @@ export default {
         });
       } catch (e) {
         return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: 'Failed to fetch' }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // ========== MOVIEBOX API ENDPOINTS ==========
+    
+    // Search: /mb/search?q=keyword&page=1&perPage=20
+    if (path === '/mb/search' && query.get('q')) {
+      try {
+        const result = await movieboxRequest("POST", "/wefeed-h5api-bff/subject/search", {
+          keyword: query.get('q'),
+          page: parseInt(query.get('page')) || 1,
+          perPage: parseInt(query.get('perPage')) || 20,
+          subjectType: parseInt(query.get('subjectType')) || 0
+        });
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Search Suggest: /mb/suggest?q=keyword
+    if (path === '/mb/suggest' && query.get('q')) {
+      try {
+        const result = await movieboxRequest("POST", "/wefeed-h5api-bff/subject/search-suggest", {
+          keyword: query.get('q'),
+          perPage: parseInt(query.get('perPage')) || 10
+        });
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Get Detail: /mb/detail?subjectId=xxx
+    if (path === '/mb/detail' && query.get('subjectId')) {
+      try {
+        const result = await movieboxRequest("GET", `/wefeed-h5api-bff/detail?subjectId=${query.get('subjectId')}`);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Detail Recommendations: /mb/rec?subjectId=xxx&page=1&perPage=12
+    if (path === '/mb/rec' && query.get('subjectId')) {
+      try {
+        const result = await movieboxRequest("GET", `/wefeed-h5api-bff/subject/detail-rec?subjectId=${query.get('subjectId')}&page=${parseInt(query.get('page')) || 1}&perPage=${parseInt(query.get('perPage')) || 12}`);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Trending: /mb/trending?tabId=xxx&page=1&perPage=18
+    if (path === '/mb/trending') {
+      try {
+        const tabId = query.get('tabId') || '';
+        const q = tabId ? `tabId=${tabId}&` : "";
+        const result = await movieboxRequest("GET", `/wefeed-h5api-bff/subject/trending?${q}page=${parseInt(query.get('page')) || 1}&perPage=${parseInt(query.get('perPage')) || 18}`);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Filter: /mb/filter (POST)
+    if (path === '/mb/filter' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const result = await movieboxRequest("POST", "/wefeed-h5api-bff/subject/filter", body);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Ranking List: /mb/ranking?id=xxx&page=1&perPage=12
+    if (path === '/mb/ranking' && query.get('id')) {
+      try {
+        const result = await movieboxRequest("GET", `/wefeed-h5api-bff/ranking-list/content?id=${query.get('id')}&page=${parseInt(query.get('page')) || 1}&perPage=${parseInt(query.get('perPage')) || 12}`);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Staff Movies: /mb/staff-movies?staffId=xxx&page=1&perPage=12
+    if (path === '/mb/staff-movies' && query.get('staffId')) {
+      try {
+        const result = await movieboxRequest("GET", `/wefeed-h5api-bff/staff/subject-list?perPage=${parseInt(query.get('perPage')) || 12}&page=${parseInt(query.get('page')) || 1}&staffId=${query.get('staffId')}`);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Staff Related: /mb/staff-related?staffId=xxx
+    if (path === '/mb/staff-related' && query.get('staffId')) {
+      try {
+        const result = await movieboxRequest("GET", `/wefeed-h5api-bff/staff/staff-related?staffId=${query.get('staffId')}`);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Platform List: /mb/platform?platform=xxx&page=1&perPage=20
+    if (path === '/mb/platform' && query.get('platform')) {
+      try {
+        const result = await movieboxRequest("GET", `/wefeed-h5api-bff/platform/play-list?page=${parseInt(query.get('page')) || 1}&perPage=${parseInt(query.get('perPage')) || 20}&platform=${query.get('platform')}`);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Home: /mb/home
+    if (path === '/mb/home') {
+      try {
+        const result = await movieboxRequest("GET", `/wefeed-h5api-bff/home?host=${MOVIEBOX_HOST}`);
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
+          status: 500,
+          headers: corsHeaders
+        });
+      }
+    }
+    
+    // Country Code: /mb/country-code
+    if (path === '/mb/country-code') {
+      try {
+        const result = await movieboxRequest("GET", "/wefeed-h5api-bff/country-code");
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, success: true, data: result }, null, 2), {
+          headers: corsHeaders
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ...CUSTOM_HEADER, error: e.message }, null, 2), {
           status: 500,
           headers: corsHeaders
         });
@@ -121,6 +364,20 @@ export default {
               '/ca': 'Categories',
               '/bl': 'Blocklist',
               '/st': 'Streams'
+            },
+            moviebox: {
+              '/mb/search?q=': 'Search movies/series',
+              '/mb/suggest?q=': 'Search suggestions',
+              '/mb/detail?subjectId=': 'Get details by ID',
+              '/mb/rec?subjectId=': 'Recommendations',
+              '/mb/trending': 'Trending content',
+              '/mb/filter': 'Filter content (POST)',
+              '/mb/ranking?id=': 'Ranking list',
+              '/mb/staff-movies?staffId=': 'Staff movies',
+              '/mb/staff-related?staffId=': 'Staff related',
+              '/mb/platform?platform=': 'Platform list',
+              '/mb/home': 'Home page data',
+              '/mb/country-code': 'Country codes'
             },
             hentai: {
               '/e?url=xxx': 'Get episode details',
@@ -390,31 +647,4 @@ async function scrapeAdvanceSearch(params) {
   return extractArticles(html);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  
-    
 // Fork and Deploy on Cloudflare Worker
- 
-
