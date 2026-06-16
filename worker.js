@@ -170,7 +170,7 @@ export default {
               '/webtoon/image?url=': 'Proxy image'
             },
             anichin: {
-              '/anichin/home': 'Home page',
+              '/anichin/home': 'Home page (returns raw HTML)',
               '/anichin/search?q=': 'Search anime',
               '/anichin/info?slug=': 'Anime info',
               '/anichin/episode?slug=': 'Episode sources',
@@ -653,7 +653,7 @@ async function handleWebtoonImage(url, corsHeaders) {
   });
 }
 
-// ==================== ANICHIN FUNCTIONS ====================
+// ==================== ANICHIN FUNCTIONS - MODIFIED TO RETURN RAW HTML ====================
 
 function getAnichinHeaders() {
   return {
@@ -663,270 +663,163 @@ function getAnichinHeaders() {
   };
 }
 
-class AnichinCardCollector {
-  constructor(cards, baseUrl) {
-    this.cards = cards;
-    this.baseUrl = baseUrl;
-    this.currentCard = null;
-    this.inTitle = false;
-  }
-  
-  element(element) {
-    if (element.tagName === 'article') {
-      this.currentCard = {};
-    }
-    
-    if (this.currentCard && element.tagName === 'a' && element.getAttribute('href')) {
-      const href = element.getAttribute('href');
-      if (href && !href.includes('#')) {
-        this.currentCard.slug = this.extractSlug(href);
-        this.currentCard.url = href;
-        const title = element.getAttribute('title');
-        if (title) this.currentCard.title = title;
-      }
-    }
-    
-    if (this.currentCard && element.tagName === 'div' && element.classNames.includes('tt')) {
-      this.inTitle = true;
-    }
-    
-    if (this.currentCard && element.tagName === 'img' && !this.currentCard.thumbnail) {
-      this.currentCard.thumbnail = element.getAttribute('data-lazy-src') || element.getAttribute('src') || '';
-    }
-    
-    if (this.currentCard && element.tagName === 'span' && element.classNames.includes('epx')) {
-      const epsText = element.textContent.replace(/\D/g, '');
-      this.currentCard.eps = epsText ? parseInt(epsText) : null;
-    }
-  }
-  
-  text(text) {
-    if (!this.currentCard) return;
-    if (this.inTitle && !this.currentCard.title) {
-      const t = text.text.trim();
-      if (t && t.length > 1) {
-        this.currentCard.title = t;
-      }
-    }
-  }
-  
-  end(element) {
-    if (element.tagName === 'div' && element.classNames.includes('tt')) {
-      this.inTitle = false;
-    }
-    
-    if (element.tagName === 'article' && this.currentCard && this.currentCard.title) {
-      this.cards.push({
-        title: this.currentCard.title,
-        eps: this.currentCard.eps || null,
-        thumbnail: this.currentCard.thumbnail || null,
-        slug: this.currentCard.slug || null
-      });
-      this.currentCard = null;
-    }
-  }
-  
-  extractSlug(href) {
-    try {
-      const url = new URL(href, this.baseUrl);
-      const parts = url.pathname.split('/').filter(Boolean);
-      return parts[parts.length - 1] || parts[parts.length - 2] || '';
-    } catch {
-      return href.split('/').filter(Boolean).pop() || '';
-    }
-  }
-}
-
+// MODIFIED: Returns raw HTML for debugging
 async function handleAnichinHome(url, corsHeaders) {
   const page = parseInt(url.searchParams.get('page')) || 1;
   const pagePath = page > 1 ? `/page/${page}/` : '';
   
-  const response = await fetch(`${ANICHIN_BASE}${pagePath}`, {
-    headers: getAnichinHeaders()
-  });
-  
-  const cards = [];
-  const collector = new AnichinCardCollector(cards, ANICHIN_BASE);
-  
-  await new HTMLRewriter()
-    .on('article', collector)
-    .on('div.tt', collector)
-    .on('a[href]', collector)
-    .on('img', collector)
-    .on('span.epx', collector)
-    .transform(response)
-    .arrayBuffer();
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    results: cards,
-    page,
-    total: cards.length
-  }, 200, corsHeaders);
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    
+    const response = await fetch(`${ANICHIN_BASE}${pagePath}`, {
+      headers: getAnichinHeaders(),
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      return jsonResponse({
+        ...CUSTOM_HEADER,
+        results: [],
+        page,
+        total: 0,
+        status: 'error',
+        message: `HTTP ${response.status}: ${response.statusText}`
+      }, 200, corsHeaders);
+    }
+    
+    const html = await response.text();
+    
+    // Return the raw HTML so you can send it to me
+    return new Response(html, {
+      headers: {
+        'Content-Type': 'text/html',
+        'Access-Control-Allow-Origin': '*'
+      }
+    });
+    
+  } catch (error) {
+    return jsonResponse({
+      ...CUSTOM_HEADER,
+      results: [],
+      page,
+      total: 0,
+      status: 'error',
+      message: error.message
+    }, 200, corsHeaders);
+  }
 }
 
+// All other Anichin endpoints also return raw HTML
 async function handleAnichinSearch(url, corsHeaders) {
   const query = url.searchParams.get('q');
   if (!query) return jsonError('Missing q parameter', 400, corsHeaders);
   
-  const response = await fetch(`${ANICHIN_BASE}/?s=${encodeURIComponent(query)}`, {
-    headers: getAnichinHeaders()
-  });
-  
-  const cards = [];
-  const collector = new AnichinCardCollector(cards, ANICHIN_BASE);
-  
-  await new HTMLRewriter()
-    .on('div.listupd article', collector)
-    .on('div.tt', collector)
-    .on('a[href]', collector)
-    .on('img', collector)
-    .on('span.epx', collector)
-    .transform(response)
-    .arrayBuffer();
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    query,
-    results: cards,
-    total: cards.length
-  }, 200, corsHeaders);
+  try {
+    const response = await fetch(`${ANICHIN_BASE}/?s=${encodeURIComponent(query)}`, {
+      headers: getAnichinHeaders()
+    });
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
+    }
+    
+    const html = await response.text();
+    return new Response(html, {
+      headers: { 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*' }
+    });
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
+  }
 }
 
 async function handleAnichinInfo(url, corsHeaders) {
   const slug = url.searchParams.get('slug');
   if (!slug) return jsonError('Missing slug parameter', 400, corsHeaders);
   
-  const response = await fetch(`${ANICHIN_BASE}/${slug}`, {
-    headers: getAnichinHeaders()
-  });
-  
-  const html = await response.text();
-  
-  const nameMatch = html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([^<]+)</);
-  const name = nameMatch ? cleanText(nameMatch[1]) : 'Unknown Title';
-  
-  const thumbMatch = html.match(/<div[^>]*class="thumb"[^>]*>\s*<img[^>]*src="([^"]+)"/i);
-  const thumbnail = thumbMatch ? thumbMatch[1] : null;
-  
-  const genres = [];
-  const genreRegex = /<div[^>]*class="genxed"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi;
-  let genreMatch;
-  while ((genreMatch = genreRegex.exec(html)) !== null) {
-    genres.push(cleanText(genreMatch[1]));
-  }
-  
-  const episodes = [];
-  const epRegex = /<div[^>]*class="eplister"[^>]*>[\s\S]*?<li>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>[\s\S]*?<div[^>]*class="epl-title"[^>]*>([^<]+)<\/div>[\s\S]*?<div[^>]*class="epl-date"[^>]*>([^<]+)<\/div>/gi;
-  let epMatch;
-  while ((epMatch = epRegex.exec(html)) !== null) {
-    const epSlug = epMatch[1].split('/').filter(Boolean).pop();
-    episodes.push({
-      slug: epSlug,
-      title: cleanText(epMatch[2]),
-      date: cleanText(epMatch[3])
+  try {
+    const response = await fetch(`${ANICHIN_BASE}/${slug}`, {
+      headers: getAnichinHeaders()
     });
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
+    }
+    
+    const html = await response.text();
+    return new Response(html, {
+      headers: { 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*' }
+    });
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
   }
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    name,
-    thumbnail,
-    genres,
-    total_episodes: episodes.length,
-    episodes: episodes.slice(0, 20)
-  }, 200, corsHeaders);
 }
 
 async function handleAnichinEpisode(url, corsHeaders) {
   const slug = url.searchParams.get('slug');
   if (!slug) return jsonError('Missing slug parameter', 400, corsHeaders);
   
-  const response = await fetch(`${ANICHIN_BASE}/${slug}`, {
-    headers: getAnichinHeaders()
-  });
-  
-  const html = await response.text();
-  
-  const servers = [];
-  const serverRegex = /<select[^>]*class="mirror"[^>]*>[\s\S]*?<option[^>]*value="([^"]+)"[^>]*>([^<]+)<\/option>[\s\S]*?<\/select>/gi;
-  let serverMatch;
-  while ((serverMatch = serverRegex.exec(html)) !== null) {
-    let embedUrl = null;
-    try {
-      const decoded = atob(serverMatch[1]);
-      const iframeMatch = decoded.match(/<iframe[^>]*src="([^"]+)"/);
-      if (iframeMatch) embedUrl = iframeMatch[1];
-    } catch(e) {}
-    servers.push({
-      label: cleanText(serverMatch[2]),
-      embedUrl: embedUrl
+  try {
+    const response = await fetch(`${ANICHIN_BASE}/${slug}`, {
+      headers: getAnichinHeaders()
     });
-  }
-  
-  const downloads = [];
-  const downloadRegex = /<div[^>]*class="soraurlx"[^>]*>[\s\S]*?<strong>([^<]+)<\/strong>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
-  let downloadMatch;
-  while ((downloadMatch = downloadRegex.exec(html)) !== null) {
-    downloads.push({
-      quality: cleanText(downloadMatch[1]),
-      url: downloadMatch[2],
-      host: cleanText(downloadMatch[3])
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
+    }
+    
+    const html = await response.text();
+    return new Response(html, {
+      headers: { 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*' }
     });
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
   }
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    servers,
-    downloads
-  }, 200, corsHeaders);
 }
 
 async function handleAnichinAnimeList(corsHeaders) {
-  const response = await fetch(`${ANICHIN_BASE}/anime`, {
-    headers: getAnichinHeaders()
-  });
-  
-  const cards = [];
-  const collector = new AnichinCardCollector(cards, ANICHIN_BASE);
-  
-  await new HTMLRewriter()
-    .on('div.listupd article', collector)
-    .on('div.tt', collector)
-    .on('a[href]', collector)
-    .on('img', collector)
-    .on('span.epx', collector)
-    .transform(response)
-    .arrayBuffer();
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    results: cards,
-    total: cards.length
-  }, 200, corsHeaders);
+  try {
+    const response = await fetch(`${ANICHIN_BASE}/anime`, {
+      headers: getAnichinHeaders()
+    });
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
+    }
+    
+    const html = await response.text();
+    return new Response(html, {
+      headers: { 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*' }
+    });
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
+  }
 }
 
 async function handleAnichinGenres(corsHeaders) {
-  const response = await fetch(`${ANICHIN_BASE}/anime`, {
-    headers: getAnichinHeaders()
-  });
-  
-  const html = await response.text();
-  const genres = [];
-  const genreRegex = /<input[^>]*name="genre\[\]"[^>]*value="([^"]+)"[^>]*>/gi;
-  let match;
-  
-  while ((match = genreRegex.exec(html)) !== null) {
-    const slug = match[1];
-    const name = slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    genres.push({ name, slug });
+  try {
+    const response = await fetch(`${ANICHIN_BASE}/anime`, {
+      headers: getAnichinHeaders()
+    });
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
+    }
+    
+    const html = await response.text();
+    return new Response(html, {
+      headers: { 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*' }
+    });
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
   }
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    genres,
-    total: genres.length
-  }, 200, corsHeaders);
 }
 
 async function handleAnichinGenre(url, corsHeaders) {
@@ -937,29 +830,23 @@ async function handleAnichinGenre(url, corsHeaders) {
   let genreUrl = `/anime?genre[]=${slug}`;
   if (page > 1) genreUrl += `&page=${page}`;
   
-  const response = await fetch(`${ANICHIN_BASE}${genreUrl}`, {
-    headers: getAnichinHeaders()
-  });
-  
-  const cards = [];
-  const collector = new AnichinCardCollector(cards, ANICHIN_BASE);
-  
-  await new HTMLRewriter()
-    .on('div.listupd article', collector)
-    .on('div.tt', collector)
-    .on('a[href]', collector)
-    .on('img', collector)
-    .on('span.epx', collector)
-    .transform(response)
-    .arrayBuffer();
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    results: cards,
-    slug,
-    page,
-    total: cards.length
-  }, 200, corsHeaders);
+  try {
+    const response = await fetch(`${ANICHIN_BASE}${genreUrl}`, {
+      headers: getAnichinHeaders()
+    });
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
+    }
+    
+    const html = await response.text();
+    return new Response(html, {
+      headers: { 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*' }
+    });
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
+  }
 }
 
 // ==================== OPLOVERZ FUNCTIONS ====================
