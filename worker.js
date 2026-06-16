@@ -653,7 +653,7 @@ async function handleWebtoonImage(url, corsHeaders) {
   });
 }
 
-// ==================== ANICHIN FUNCTIONS - FIXED ====================
+// ==================== ANICHIN FUNCTIONS - WITH FULL URLs ====================
 
 function getAnichinHeaders() {
   return {
@@ -663,17 +663,38 @@ function getAnichinHeaders() {
   };
 }
 
-// Extract anime cards from HTML
-function extractAnichinCards(html) {
+// Helper to make full URL
+function fullAnichinUrl(path) {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  if (path.startsWith('//')) return `https:${path}`;
+  if (path.startsWith('/')) return `${ANICHIN_BASE}${path}`;
+  return `${ANICHIN_BASE}/${path}`;
+}
+
+// Extract anime cards with full URLs
+function extractAnichinCards(html, section = 'all') {
   const cards = [];
+  
+  let searchHtml = html;
+  if (section === 'popular') {
+    const popMatch = html.match(/<div[^>]*class="[^"]*popconslide[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
+    if (popMatch) searchHtml = popMatch[1];
+  }
+  
+  if (section === 'latest') {
+    const latestMatch = html.match(/<div[^>]*class="listupd[^"]*normal"[^>]*>[\s\S]*?<div[^>]*class="excstf"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i);
+    if (latestMatch) searchHtml = latestMatch[1];
+  }
+  
   const articleRegex = /<article[^>]*class="[^"]*bs[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
   let articleMatch;
   
-  while ((articleMatch = articleRegex.exec(html)) !== null) {
+  while ((articleMatch = articleRegex.exec(searchHtml)) !== null) {
     const article = articleMatch[1];
     
     const urlMatch = article.match(/<a[^>]*href="([^"]+)"[^>]*>/i);
-    const url = urlMatch ? urlMatch[1] : null;
+    const url = urlMatch ? fullAnichinUrl(urlMatch[1]) : null;
     
     const titleMatch = article.match(/<div[^>]*class="[^"]*tt[^"]*"[^>]*>([^<]+)<\/div>/i);
     const title = titleMatch ? cleanText(titleMatch[1]) : null;
@@ -705,7 +726,7 @@ function extractAnichinCards(html) {
   return cards;
 }
 
-// Extract schedule from homepage
+// Extract schedule with full URLs
 function extractAnichinSchedule(html) {
   const schedule = [];
   const dayRegex = /<div[^>]*class="[^"]*listSchh[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
@@ -722,7 +743,7 @@ function extractAnichinSchedule(html) {
     
     while ((animeMatch = animeRegex.exec(dayBlock)) !== null) {
       animeList.push({
-        url: animeMatch[1],
+        url: fullAnichinUrl(animeMatch[1]),
         title: cleanText(animeMatch[2])
       });
     }
@@ -736,6 +757,38 @@ function extractAnichinSchedule(html) {
   }
   
   return schedule;
+}
+
+// Extract banners with full URLs
+function extractAnichinBanners(html) {
+  const banners = [];
+  const bannerRegex = /<div[^>]*class="swiper-slide[^"]*item"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi;
+  let bannerMatch;
+  
+  while ((bannerMatch = bannerRegex.exec(html)) !== null) {
+    const block = bannerMatch[1];
+    
+    const imgMatch = block.match(/<div[^>]*class="backdrop"[^>]*style="background-image:\s*url\(['"]?([^'"]+)['"]?\)/i);
+    const image = imgMatch ? imgMatch[1] : null;
+    
+    const titleMatch = block.match(/<h2><a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a><\/h2>/i);
+    const url = titleMatch ? fullAnichinUrl(titleMatch[1]) : null;
+    const title = titleMatch ? cleanText(titleMatch[2]) : null;
+    
+    const watchMatch = block.match(/<a[^>]*class="watch"[^>]*href="([^"]+)"[^>]*>Tonton<\/a>/i);
+    const watchUrl = watchMatch ? fullAnichinUrl(watchMatch[1]) : null;
+    
+    if (title) {
+      banners.push({
+        title: title,
+        url: url,
+        image: image,
+        watch_url: watchUrl
+      });
+    }
+  }
+  
+  return banners;
 }
 
 // Get pagination info
@@ -755,55 +808,7 @@ function extractPagination(html) {
   return pagination;
 }
 
-// Extract banners from homepage
-function extractAnichinBanners(html) {
-  const banners = [];
-  const bannerRegex = /<div[^>]*class="swiper-slide[^"]*item"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi;
-  let bannerMatch;
-  
-  while ((bannerMatch = bannerRegex.exec(html)) !== null) {
-    const block = bannerMatch[1];
-    
-    const imgMatch = block.match(/<div[^>]*class="backdrop"[^>]*style="background-image:\s*url\(['"]?([^'"]+)['"]?\)/i);
-    const image = imgMatch ? imgMatch[1] : null;
-    
-    const titleMatch = block.match(/<h2><a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a><\/h2>/i);
-    const url = titleMatch ? titleMatch[1] : null;
-    const title = titleMatch ? cleanText(titleMatch[2]) : null;
-    
-    const watchMatch = block.match(/<a[^>]*class="watch"[^>]*href="([^"]+)"[^>]*>Tonton<\/a>/i);
-    const watchUrl = watchMatch ? watchMatch[1] : null;
-    
-    if (title) {
-      banners.push({
-        title: title,
-        url: url,
-        image: image,
-        watch_url: watchUrl
-      });
-    }
-  }
-  
-  return banners;
-}
-
-// Extract genres from filter
-function extractAnichinGenres(html) {
-  const genres = [];
-  const genreRegex = /<input[^>]*name="genre\[\]"[^>]*value="([^"]+)"[^>]*>\s*<label[^>]*for="[^"]*"[^>]*>([^<]+)<\/label>/gi;
-  let match;
-  
-  while ((match = genreRegex.exec(html)) !== null) {
-    genres.push({
-      slug: match[1],
-      name: cleanText(match[2])
-    });
-  }
-  
-  return genres;
-}
-
-// Extract episode info from page
+// Extract episode info with full URLs
 function extractAnichinEpisodeInfo(html) {
   const servers = [];
   const serverRegex = /<select[^>]*class="mirror"[^>]*>[\s\S]*?<option[^>]*value="([^"]+)"[^>]*>([^<]+)<\/option>[\s\S]*?<\/select>/gi;
@@ -829,12 +834,28 @@ function extractAnichinEpisodeInfo(html) {
   while ((downloadMatch = downloadRegex.exec(html)) !== null) {
     downloads.push({
       quality: cleanText(downloadMatch[1]),
-      url: downloadMatch[2],
+      url: fullAnichinUrl(downloadMatch[2]),
       host: cleanText(downloadMatch[3])
     });
   }
   
   return { servers, downloads };
+}
+
+// Extract genres
+function extractAnichinGenres(html) {
+  const genres = [];
+  const genreRegex = /<input[^>]*name="genre\[\]"[^>]*value="([^"]+)"[^>]*>\s*<label[^>]*for="[^"]*"[^>]*>([^<]+)<\/label>/gi;
+  let match;
+  
+  while ((match = genreRegex.exec(html)) !== null) {
+    genres.push({
+      slug: match[1],
+      name: cleanText(match[2])
+    });
+  }
+  
+  return genres;
 }
 
 // ==================== ANICHIN HANDLERS ====================
@@ -860,18 +881,11 @@ async function handleAnichinHome(url, corsHeaders) {
     
     const html = await response.text();
     
-    const popular = extractAnichinCards(html);
+    const popular = extractAnichinCards(html, 'popular');
+    const latest = extractAnichinCards(html, 'latest');
     const schedule = extractAnichinSchedule(html);
     const pagination = extractPagination(html);
     const banners = extractAnichinBanners(html);
-    
-    // Extract latest releases from the listupd section
-    const latestRegex = /<div[^>]*class="listupd[^"]*normal"[^>]*>[\s\S]*?<div[^>]*class="excstf"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i;
-    const latestMatch = html.match(latestRegex);
-    let latest = [];
-    if (latestMatch) {
-      latest = extractAnichinCards(latestMatch[1]);
-    }
     
     return jsonResponse({
       ...CUSTOM_HEADER,
@@ -909,7 +923,7 @@ async function handleAnichinSearch(url, corsHeaders) {
     }
     
     const html = await response.text();
-    const results = extractAnichinCards(html);
+    const results = extractAnichinCards(html, 'all');
     
     return jsonResponse({
       ...CUSTOM_HEADER,
@@ -959,7 +973,8 @@ async function handleAnichinInfo(url, corsHeaders) {
       episodes.push({
         slug: epSlug,
         title: cleanText(epMatch[2]),
-        date: cleanText(epMatch[3])
+        date: cleanText(epMatch[3]),
+        url: fullAnichinUrl(epMatch[1])
       });
     }
     
@@ -1015,7 +1030,7 @@ async function handleAnichinAnimeList(corsHeaders) {
     }
     
     const html = await response.text();
-    const results = extractAnichinCards(html);
+    const results = extractAnichinCards(html, 'all');
     
     return jsonResponse({
       ...CUSTOM_HEADER,
@@ -1070,7 +1085,7 @@ async function handleAnichinGenre(url, corsHeaders) {
     }
     
     const html = await response.text();
-    const results = extractAnichinCards(html);
+    const results = extractAnichinCards(html, 'all');
     const pagination = extractPagination(html);
     
     return jsonResponse({
