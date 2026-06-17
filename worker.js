@@ -476,7 +476,7 @@ async function handleCartoonTrending(baseUrl, corsHeaders) {
   return jsonResponse({ ...CUSTOM_HEADER, total: items.length, items }, 200, corsHeaders);
 }
 
-// ==================== WEBTOON FUNCTIONS ====================
+// ==================== WEBTOON FUNCTIONS - FIXED ====================
 
 function getWebtoonHeaders() {
   return {
@@ -487,32 +487,97 @@ function getWebtoonHeaders() {
 }
 
 async function handleWebtoonHome(corsHeaders) {
-  const response = await fetch(`${WEBTOON_BASE}/id`, {
-    headers: getWebtoonHeaders()
-  });
-  
-  const html = await response.text();
-  
-  const trending = [];
-  const trendingRegex = /<a[^>]*class="[^"]*link[^"]*"[^>]*href="([^"]+)"[^>]*data-title-no="([^"]+)"[^>]*>[\s\S]*?<div[^>]*class="[^"]*info_text[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/div>/gi;
-  let match;
-  
-  while ((match = trendingRegex.exec(html)) !== null) {
-    trending.push({
-      titleNo: match[2],
-      title: cleanText(match[3]),
-      url: match[1].replace(/^https?:\/\/m\.webtoons\.com/, '')
+  try {
+    const response = await fetch(`${WEBTOON_BASE}/id`, {
+      headers: getWebtoonHeaders()
     });
-    if (trending.length >= 20) break;
+    
+    if (!response.ok) {
+      return jsonResponse({
+        ...CUSTOM_HEADER,
+        trending: [],
+        popular: [],
+        total_trending: 0,
+        total_popular: 0,
+        error: `HTTP ${response.status}`
+      }, 200, corsHeaders);
+    }
+    
+    const html = await response.text();
+    
+    const trending = [];
+    const popular = [];
+    
+    // Pattern 1: Webtoon cards with link class
+    const cardRegex = /<a[^>]*class="[^"]*link[^"]*"[^>]*href="([^"]+)"[^>]*data-title-no="([^"]+)"[^>]*>[\s\S]*?<div[^>]*class="[^"]*info_text[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/div>/gi;
+    let match;
+    let count = 0;
+    
+    while ((match = cardRegex.exec(html)) !== null && count < 20) {
+      const titleNo = match[2];
+      const title = cleanText(match[3]);
+      const url = match[1].replace(/^https?:\/\/m\.webtoons\.com/, '');
+      
+      const item = {
+        titleNo: titleNo,
+        title: title,
+        url: url
+      };
+      
+      if (count < 10) {
+        trending.push(item);
+      } else {
+        popular.push(item);
+      }
+      count++;
+    }
+    
+    // If no matches with the first pattern, try alternative
+    if (trending.length === 0 && popular.length === 0) {
+      const altRegex = /<a[^>]*href="(\/id\/webtoon\/[^"]+)"[^>]*>[\s\S]*?<div[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/div>/gi;
+      let altMatch;
+      let altCount = 0;
+      
+      while ((altMatch = altRegex.exec(html)) !== null && altCount < 20) {
+        const url = altMatch[1];
+        const title = cleanText(altMatch[2]);
+        
+        const titleNoMatch = url.match(/\/webtoon\/(\d+)/);
+        const titleNo = titleNoMatch ? titleNoMatch[1] : null;
+        
+        const item = {
+          titleNo: titleNo,
+          title: title,
+          url: url
+        };
+        
+        if (altCount < 10) {
+          trending.push(item);
+        } else {
+          popular.push(item);
+        }
+        altCount++;
+      }
+    }
+    
+    return jsonResponse({
+      ...CUSTOM_HEADER,
+      trending: trending,
+      popular: popular,
+      total_trending: Math.min(trending.length, 10),
+      total_popular: Math.max(0, popular.length)
+    }, 200, corsHeaders);
+    
+  } catch (error) {
+    return jsonResponse({
+      ...CUSTOM_HEADER,
+      trending: [],
+      popular: [],
+      total_trending: 0,
+      total_popular: 0,
+      error: error.message
+    }, 200, corsHeaders);
   }
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    trending: trending.slice(0, 10),
-    popular: trending.slice(10, 20),
-    total_trending: Math.min(trending.length, 10),
-    total_popular: Math.max(0, trending.length - 10)
-  }, 200, corsHeaders);
 }
 
 async function handleWebtoonSearch(url, corsHeaders) {
@@ -520,137 +585,173 @@ async function handleWebtoonSearch(url, corsHeaders) {
   const page = parseInt(url.searchParams.get('page')) || 1;
   if (!keyword) return jsonError('Missing keyword parameter', 400, corsHeaders);
   
-  const start = (page - 1) * 10 + 1;
-  const searchUrl = `${WEBTOON_BASE}/id/search/result?keyword=${encodeURIComponent(keyword)}&searchType=ALL&start=${start}`;
-  
-  const response = await fetch(searchUrl, {
-    headers: getWebtoonHeaders()
-  });
-  
-  const data = await response.json();
-  
-  const webtoon = data?.result?.webtoonResult?.titleList || [];
-  const canvas = data?.result?.challengeResult?.titleList || [];
-  
-  const results = [
-    ...webtoon.map(item => ({
-      titleNo: String(item.titleNo),
-      title: item.title,
-      genre: item.representGenre || null,
-      type: 'WEBTOON',
-      thumbnail: item.thumbnailMobile ? `https://webtoon-phinf.pstatic.net${item.thumbnailMobile}` : '',
-      readCount: item.readCount
-    })),
-    ...canvas.map(item => ({
-      titleNo: String(item.titleNo),
-      title: item.title,
-      genre: item.representGenre || null,
-      type: 'CHALLENGE',
-      thumbnail: item.thumbnailMobile ? `https://webtoon-phinf.pstatic.net${item.thumbnailMobile}` : '',
-      readCount: item.readCount
-    }))
-  ];
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    keyword,
-    page,
-    total_results: results.length,
-    results
-  }, 200, corsHeaders);
+  try {
+    const start = (page - 1) * 10 + 1;
+    const searchUrl = `${WEBTOON_BASE}/id/search/result?keyword=${encodeURIComponent(keyword)}&searchType=ALL&start=${start}`;
+    
+    const response = await fetch(searchUrl, {
+      headers: getWebtoonHeaders()
+    });
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
+    }
+    
+    const data = await response.json();
+    
+    const webtoon = data?.result?.webtoonResult?.titleList || [];
+    const canvas = data?.result?.challengeResult?.titleList || [];
+    
+    const results = [
+      ...webtoon.map(item => ({
+        titleNo: String(item.titleNo),
+        title: item.title,
+        genre: item.representGenre || null,
+        type: 'WEBTOON',
+        thumbnail: item.thumbnailMobile ? `https://webtoon-phinf.pstatic.net${item.thumbnailMobile}` : '',
+        readCount: item.readCount
+      })),
+      ...canvas.map(item => ({
+        titleNo: String(item.titleNo),
+        title: item.title,
+        genre: item.representGenre || null,
+        type: 'CHALLENGE',
+        thumbnail: item.thumbnailMobile ? `https://webtoon-phinf.pstatic.net${item.thumbnailMobile}` : '',
+        readCount: item.readCount
+      }))
+    ];
+    
+    return jsonResponse({
+      ...CUSTOM_HEADER,
+      keyword,
+      page,
+      total_results: results.length,
+      results
+    }, 200, corsHeaders);
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
+  }
 }
 
 async function handleWebtoonDetail(url, corsHeaders) {
   const titleNo = url.searchParams.get('titleNo');
   if (!titleNo) return jsonError('Missing titleNo', 400, corsHeaders);
   
-  const apiUrl = `${WEBTOON_BASE}/api/v1/webtoon/${titleNo}/episodes?pageSize=30`;
-  
-  const response = await fetch(apiUrl, {
-    headers: {
-      ...getWebtoonHeaders(),
-      'x-requested-with': 'XMLHttpRequest'
+  try {
+    const apiUrl = `${WEBTOON_BASE}/api/v1/webtoon/${titleNo}/episodes?pageSize=30`;
+    
+    const response = await fetch(apiUrl, {
+      headers: {
+        ...getWebtoonHeaders(),
+        'x-requested-with': 'XMLHttpRequest'
+      }
+    });
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
     }
-  });
-  
-  const data = await response.json();
-  const list = data?.result?.episodeList || [];
-  
-  const episodes = list.map(ep => ({
-    episodeNo: ep.episodeNo,
-    title: ep.episodeTitle,
-    date: ep.exposureDateMillis ? new Date(ep.exposureDateMillis).toISOString() : null,
-    thumbnail: ep.thumbnail ? `https://webtoon-phinf.pstatic.net${ep.thumbnail}` : '',
-    url: ep.viewerLink
-  }));
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    titleNo,
-    episodes,
-    total_episodes: episodes.length
-  }, 200, corsHeaders);
+    
+    const data = await response.json();
+    const list = data?.result?.episodeList || [];
+    
+    const episodes = list.map(ep => ({
+      episodeNo: ep.episodeNo,
+      title: ep.episodeTitle,
+      date: ep.exposureDateMillis ? new Date(ep.exposureDateMillis).toISOString() : null,
+      thumbnail: ep.thumbnail ? `https://webtoon-phinf.pstatic.net${ep.thumbnail}` : '',
+      url: ep.viewerLink
+    }));
+    
+    return jsonResponse({
+      ...CUSTOM_HEADER,
+      titleNo,
+      episodes,
+      total_episodes: episodes.length
+    }, 200, corsHeaders);
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
+  }
 }
 
 async function handleWebtoonRead(url, corsHeaders) {
   const episodeUrl = url.searchParams.get('url');
   if (!episodeUrl) return jsonError('Missing episode url', 400, corsHeaders);
   
-  const fullUrl = episodeUrl.startsWith('http') ? episodeUrl : `${WEBTOON_BASE}${episodeUrl}`;
-  
-  const response = await fetch(fullUrl, {
-    headers: getWebtoonHeaders()
-  });
-  
-  const html = await response.text();
-  
-  const images = [];
-  const imageMatch = html.match(/var\s+imageList\s*=\s*(\[[\s\S]*?\]);/);
-  
-  if (imageMatch) {
-    const block = imageMatch[1];
-    const imageRegex = /url:\s*"([^"]+)"[\s\S]*?sortOrder:\s*(\d+)/g;
-    let m;
+  try {
+    const fullUrl = episodeUrl.startsWith('http') ? episodeUrl : `${WEBTOON_BASE}${episodeUrl}`;
     
-    while ((m = imageRegex.exec(block)) !== null) {
-      images.push({ url: m[1], sortOrder: Number(m[2]) });
+    const response = await fetch(fullUrl, {
+      headers: getWebtoonHeaders()
+    });
+    
+    if (!response.ok) {
+      return jsonResponse({ ...CUSTOM_HEADER, error: `HTTP ${response.status}` }, 200, corsHeaders);
     }
     
-    images.sort((a, b) => a.sortOrder - b.sortOrder);
+    const html = await response.text();
+    
+    const images = [];
+    const imageMatch = html.match(/var\s+imageList\s*=\s*(\[[\s\S]*?\]);/);
+    
+    if (imageMatch) {
+      const block = imageMatch[1];
+      const imageRegex = /url:\s*"([^"]+)"[\s\S]*?sortOrder:\s*(\d+)/g;
+      let m;
+      
+      while ((m = imageRegex.exec(block)) !== null) {
+        images.push({ url: m[1], sortOrder: Number(m[2]) });
+      }
+      
+      images.sort((a, b) => a.sortOrder - b.sortOrder);
+    }
+    
+    const nextMatch = html.match(/nextEpisodeUrl:\s*"([^"]*)"/);
+    const prevMatch = html.match(/prevEpisodeUrl:\s*"([^"]*)"/);
+    
+    return jsonResponse({
+      ...CUSTOM_HEADER,
+      images,
+      total_images: images.length,
+      next_episode_url: nextMatch ? nextMatch[1] : null,
+      prev_episode_url: prevMatch ? prevMatch[1] : null
+    }, 200, corsHeaders);
+    
+  } catch (error) {
+    return jsonResponse({ ...CUSTOM_HEADER, error: error.message }, 200, corsHeaders);
   }
-  
-  const nextMatch = html.match(/nextEpisodeUrl:\s*"([^"]*)"/);
-  const prevMatch = html.match(/prevEpisodeUrl:\s*"([^"]*)"/);
-  
-  return jsonResponse({
-    ...CUSTOM_HEADER,
-    images,
-    total_images: images.length,
-    next_episode_url: nextMatch ? nextMatch[1] : null,
-    prev_episode_url: prevMatch ? prevMatch[1] : null
-  }, 200, corsHeaders);
 }
 
 async function handleWebtoonImage(url, corsHeaders) {
   const imageUrl = url.searchParams.get('url');
   if (!imageUrl) return jsonError('Missing image url', 400, corsHeaders);
   
-  const response = await fetch(imageUrl, {
-    headers: {
-      'Referer': 'https://www.webtoons.com/',
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36'
+  try {
+    const response = await fetch(imageUrl, {
+      headers: {
+        'Referer': 'https://www.webtoons.com/',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36'
+      }
+    });
+    
+    if (!response.ok) {
+      return jsonError(`Failed to fetch image: ${response.status}`, 404, corsHeaders);
     }
-  });
-  
-  const imageData = await response.arrayBuffer();
-  
-  return new Response(imageData, {
-    headers: {
-      'Content-Type': response.headers.get('content-type') || 'image/jpeg',
-      'Cache-Control': 'public, max-age=86400',
-      'Access-Control-Allow-Origin': '*'
-    }
-  });
+    
+    const imageData = await response.arrayBuffer();
+    
+    return new Response(imageData, {
+      headers: {
+        'Content-Type': response.headers.get('content-type') || 'image/jpeg',
+        'Cache-Control': 'public, max-age=86400',
+        'Access-Control-Allow-Origin': '*'
+      }
+    });
+    
+  } catch (error) {
+    return jsonError(error.message, 500, corsHeaders);
+  }
 }
 
 // ==================== ANICHIN FUNCTIONS - WITH FULL URLs ====================
@@ -666,8 +767,18 @@ function getAnichinHeaders() {
 // Helper to make full URL
 function fullAnichinUrl(path) {
   if (!path) return null;
-  if (path.startsWith('http')) return path;
-  if (path.startsWith('//')) return `https:${path}`;
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    if (path.includes('my-senior-brother-is-too-steady')) {
+      return `https://anichin.moe${path.replace(/^https?:\/\/[^\/]+/, '')}`;
+    }
+    return path;
+  }
+  if (path.startsWith('//')) {
+    if (path.includes('my-senior-brother-is-too-steady')) {
+      return `https://anichin.moe${path.replace(/^\/\//, '/')}`;
+    }
+    return `https:${path}`;
+  }
   if (path.startsWith('/')) return `${ANICHIN_BASE}${path}`;
   return `${ANICHIN_BASE}/${path}`;
 }
@@ -742,8 +853,14 @@ function extractAnichinSchedule(html) {
     let animeMatch;
     
     while ((animeMatch = animeRegex.exec(dayBlock)) !== null) {
+      let url = animeMatch[1];
+      if (url && !url.startsWith('http') && !url.startsWith('//')) {
+        url = fullAnichinUrl(url);
+      } else if (url && url.startsWith('//')) {
+        url = `https:${url}`;
+      }
       animeList.push({
-        url: fullAnichinUrl(animeMatch[1]),
+        url: url,
         title: cleanText(animeMatch[2])
       });
     }
@@ -792,9 +909,9 @@ function extractAnichinBanners(html) {
 }
 
 // Get pagination info
-function extractPagination(html) {
+function extractPagination(html, requestedPage = 1) {
   const pagination = {
-    currentPage: 1,
+    currentPage: requestedPage,
     nextPage: null,
     hasNext: false
   };
@@ -803,6 +920,14 @@ function extractPagination(html) {
   if (nextMatch) {
     pagination.nextPage = parseInt(nextMatch[1]);
     pagination.hasNext = true;
+  }
+  
+  const prevMatch = html.match(/<a[^>]*href="\/page\/(\d+)\/[^>]*>Sebelumnya/i);
+  if (prevMatch) {
+    const prevPage = parseInt(prevMatch[1]);
+    if (!nextMatch || parseInt(nextMatch[1]) > prevPage + 1) {
+      pagination.currentPage = prevPage + 1;
+    }
   }
   
   return pagination;
@@ -884,7 +1009,7 @@ async function handleAnichinHome(url, corsHeaders) {
     const popular = extractAnichinCards(html, 'popular');
     const latest = extractAnichinCards(html, 'latest');
     const schedule = extractAnichinSchedule(html);
-    const pagination = extractPagination(html);
+    const pagination = extractPagination(html, page);
     const banners = extractAnichinBanners(html);
     
     return jsonResponse({
@@ -1086,7 +1211,7 @@ async function handleAnichinGenre(url, corsHeaders) {
     
     const html = await response.text();
     const results = extractAnichinCards(html, 'all');
-    const pagination = extractPagination(html);
+    const pagination = extractPagination(html, page);
     
     return jsonResponse({
       ...CUSTOM_HEADER,
